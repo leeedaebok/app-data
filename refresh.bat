@@ -1,7 +1,7 @@
 @echo off
-REM ì•± ë°ì´í„° ê°±ì‹  â€” ìˆ˜ì§‘ í›„ ë³€ê²½ì´ ìˆì„ ë•Œë§Œ ì»¤ë°‹/í‘¸ì‹œí•œë‹¤.
-REM   refresh.bat              ëª¨ë“  ì•±
-REM   refresh.bat gonggoalimi  íŠ¹ì • ì•±ë§Œ
+REM ¾Û µ¥ÀÌÅÍ °»½Å - ¼öÁı ÈÄ º¯°æÀÌ ÀÖÀ» ¶§¸¸ Ä¿¹Ô/Çª½ÃÇÑ´Ù.
+REM   refresh.bat              ¸ğµç ¾Û
+REM   refresh.bat gonggoalimi  Æ¯Á¤ ¾Û¸¸
 setlocal enabledelayedexpansion
 cd /d "%~dp0"
 
@@ -10,7 +10,7 @@ set FAILED=0
 set RAN=0
 
 if "%TARGET%"=="" (
-  echo [1/3] ì „ì²´ ì•± ìˆ˜ì§‘...
+  echo [1/3] ÀüÃ¼ ¾Û ¼öÁı...
   for /d %%A in (apps\*) do (
     if exist "%%A\collect.py" (
       set RAN=1
@@ -20,35 +20,35 @@ if "%TARGET%"=="" (
   )
 ) else (
   if not exist "apps\%TARGET%\collect.py" (
-    echo [ì˜¤ë¥˜] apps\%TARGET%\collect.py ê°€ ì—†ìŠµë‹ˆë‹¤.
+    echo [¿À·ù] apps\%TARGET%\collect.py °¡ ¾ø½À´Ï´Ù.
     exit /b 1
   )
-  echo [1/3] %TARGET% ìˆ˜ì§‘...
+  echo [1/3] %TARGET% ¼öÁı...
   set RAN=1
   python "apps\%TARGET%\collect.py"
   if errorlevel 1 set FAILED=1
 )
 
 if "%RAN%"=="0" (
-  echo [ì˜¤ë¥˜] ì‹¤í–‰í•  ìˆ˜ì§‘ê¸°ê°€ ì—†ìŠµë‹ˆë‹¤.
+  echo [¿À·ù] ½ÇÇàÇÒ ¼öÁı±â°¡ ¾ø½À´Ï´Ù.
   exit /b 1
 )
 
-REM ìˆ˜ì§‘ì´ í•˜ë‚˜ë¼ë„ ì‹¤íŒ¨í•˜ë©´ í‘¸ì‹œí•˜ì§€ ì•ŠëŠ”ë‹¤ â€” ë°˜ìª½ ë°ì´í„°ë¥¼ ì•±ì— ë‚´ë³´ë‚´ì§€ ì•Šê¸° ìœ„í•´ì„œë‹¤.
+REM ¼öÁıÀÌ ÇÏ³ª¶óµµ ½ÇÆĞÇÏ¸é Çª½ÃÇÏÁö ¾Ê´Â´Ù - ¹İÂÊ µ¥ÀÌÅÍ¸¦ ¾Û¿¡ ³»º¸³»Áö ¾Ê±â À§ÇØ¼­´Ù.
 if "%FAILED%"=="1" (
-  echo [ì¤‘ë‹¨] ìˆ˜ì§‘ ì‹¤íŒ¨ - ì»¤ë°‹/í‘¸ì‹œë¥¼ ê±´ë„ˆëœë‹ˆë‹¤.
+  echo [Áß´Ü] ¼öÁı ½ÇÆĞ - Ä¿¹Ô/Çª½Ã¸¦ °Ç³Ê¶İ´Ï´Ù.
   exit /b 1
 )
 
-echo [2/3] ë³€ê²½ í™•ì¸...
+echo [2/3] º¯°æ È®ÀÎ...
 git add data
 git diff --cached --quiet
 if %errorlevel%==0 (
-  echo   ë³€ê²½ ì—†ìŒ - í‘¸ì‹œ ìƒëµ.
+  echo   º¯°æ ¾øÀ½ - Çª½Ã »ı·«.
   exit /b 0
 )
 
-echo [3/3] ì»¤ë°‹ / í‘¸ì‹œ...
+echo [3/3] Ä¿¹Ô / Çª½Ã...
 for /f "tokens=*" %%d in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd_HH:mm"') do set NOW=%%d
 if "%TARGET%"=="" (
   git commit -m "data: refresh %NOW%"
@@ -56,4 +56,4 @@ if "%TARGET%"=="" (
   git commit -m "data(%TARGET%): refresh %NOW%"
 )
 git push
-echo ì™„ë£Œ.
+echo ¿Ï·á.

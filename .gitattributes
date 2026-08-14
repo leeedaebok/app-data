@@ -1,0 +1,5 @@
+# 배치 파일은 CRLF 여야 cmd 가 파싱한다. LF 로 정규화되면 실행이 깨진다.
+*.bat text eol=crlf
+*.py  text eol=lf
+*.md  text eol=lf
+*.json text eol=lf

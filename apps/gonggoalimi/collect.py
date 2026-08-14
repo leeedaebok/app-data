@@ -20,8 +20,9 @@ import urllib.request
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+# 콘솔 인코딩은 건드리지 않는다(cmd 는 cp949). 표현 못 하는 글자만 흘려보낸다.
 if hasattr(sys.stdout, "reconfigure"):
-    sys.stdout.reconfigure(encoding="utf-8")
+    sys.stdout.reconfigure(errors="replace")
 
 APP = "gonggoalimi"
 ROOT = Path(__file__).resolve().parents[2]
