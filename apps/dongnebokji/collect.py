@@ -37,7 +37,8 @@ ORD = {'현금': 0, '감면': 1, '물품·바우처': 2, '서비스·돌봄': 3,
 KEEP = ('id', 'name', 'one_line', 'amount', 'benefit_type', 'target_groups', 'income_req',
         'age_min', 'age_max', 'extra_conditions', 'residency_months', 'deadline',
         'url', 'tel', 'recv', 'org', 'field',
-        'detail_url', 'purpose', 'body', 'who', 'criteria', 'docs', 'how', 'law', 'pay_type')
+        'detail_url', 'purpose', 'body', 'who', 'criteria', 'docs', 'how', 'law', 'pay_type',
+        'match')
 
 
 def die(msg):
@@ -106,10 +107,32 @@ def load_tag_fix():
     return json.load(open(p, encoding='utf-8'))
 
 
+def load_match_fix():
+    """대상군이 AND 인지 OR 인지(welfare_local/retag_match.py 산출).
+
+    `['장애인','임신출산']` 인 두 제도가 정반대다 — "장애인가정 출산지원금"은
+    둘 다 갖춰야 하고, "공영주차장 감면"은 나열된 자격 중 하나면 된다.
+    관계를 모르면 "영유아만 골랐는데 장애인 제도가 뜬다"가 된다(실사용 지적).
+    """
+    p = os.path.join(SRC_DIR, 'match_fix.json')
+    if not os.path.exists(p):
+        print('[동네복지] 경고: match_fix.json 없음 — 전부 any 로 둔다', file=sys.stderr)
+        return {}
+    return json.load(open(p, encoding='utf-8'))
+
+
 def main():
     rows = load_rows()
     LIST, DET = load_source_text()
     TAGFIX = load_tag_fix()
+    MATCHFIX = load_match_fix()
+    n_all = 0
+    for r in rows:
+        m = MATCHFIX.get(r.get('id'))
+        if m and m.get('match') == 'all':
+            r['match'] = 'all'
+            n_all += 1
+    print(f'[동네복지] 대상군 AND 판정 {n_all}건 / 판정본 {len(MATCHFIX)}건')
     fixed = 0
     for r in rows:
         f = TAGFIX.get(r.get('id'))
