@@ -91,9 +91,33 @@ def load_source_text():
     return L, D
 
 
+def load_tag_fix():
+    """'전체주민' 오태깅 교정본(welfare_local/retag_everyone.py 산출).
+
+    직업·자격 한정 제도가 '전체주민'으로 태깅돼 앱의 '누구나' 목록에 떴다.
+    원본 out_*.jsonl 은 건드리지 않고 여기서 덧씌운다 — 되돌리기 쉽게.
+    ⚠️키워드로 거르지 않는다. '의료원'·'기관' 같은 어휘를 쓰면
+      "삼척의료원 방문재활 서비스"(주민 대상이 맞다)까지 걸린다.
+    """
+    p = os.path.join(SRC_DIR, 'tag_fix.json')
+    if not os.path.exists(p):
+        print('[동네복지] 경고: tag_fix.json 없음 — 원본 태그를 그대로 쓴다', file=sys.stderr)
+        return {}
+    return json.load(open(p, encoding='utf-8'))
+
+
 def main():
     rows = load_rows()
     LIST, DET = load_source_text()
+    TAGFIX = load_tag_fix()
+    fixed = 0
+    for r in rows:
+        f = TAGFIX.get(r.get('id'))
+        if f is not None and isinstance(f.get('target_groups'), list):
+            if set(f['target_groups']) != set(r.get('target_groups') or []):
+                fixed += 1
+            r['target_groups'] = f['target_groups']
+    print(f'[동네복지] 태그 교정 적용 {fixed}건 / 교정본 {len(TAGFIX)}건')
     orgmap_path = os.path.join(SRC_DIR, 'org_map.json')
     orgmap = {}
     if os.path.exists(orgmap_path):
