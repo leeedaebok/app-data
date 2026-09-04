@@ -25,6 +25,13 @@ https://raw.githubusercontent.com/leeedaebok/app-data/master/data/<앱>/<파일>
 | 앱 | 파일 | 내용 | 원본 |
 |---|---|---|---|
 | gonggoalimi | `data/gonggoalimi/notices.json` | 모집중 사업공고 | K-Startup (data.go.kr 15125364) |
+| dongnebokji | `data/dongnebokji/index.json` + `r0000~r0226.json` | 시군구별 복지 제도 227개 지역 | 보조금24(15113968) + 복지로(B554287) |
+
+⚠️ **dongnebokji 는 다른 앱과 달리 여기서 OpenAPI 를 직접 치지 않는다.** 원본 수집과
+LLM 구조화가 무거워서(9,909건) `autoblog_local/welfare_local/` 에 따로 있고, 여기
+`collect.py` 는 그 산출물을 배포용으로 굽기만 한다. 매일 돌아도 결과가 같으면 푸시되지 않는다.
+제도 원문이 바뀌면 `welfare_local/extract_worker.py` 를 먼저 돌릴 것(월 1회면 충분 —
+원본 수정일시의 95.6%가 당해 연도다).
 
 ## 갱신 방법
 
