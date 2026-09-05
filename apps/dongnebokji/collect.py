@@ -15,6 +15,7 @@
 """
 import collections
 import glob
+import hashlib
 import json
 import os
 import sys
@@ -70,6 +71,45 @@ def load_rows():
 
 def sido_of(org):
     return next((k for k in SIDO if (org or '').startswith(k)), None)
+
+
+def build_sgg_index(rows):
+    """{시도: [(정규화 시군구명, 표준 org 키)]} — **긴 이름부터** 정렬해서 돌려준다.
+
+    🚨**시군구 산하기관이 광역으로 샜다**(실사용 지적 2026-09-05).
+      `서울특별시서대문구도시관리공단` 은 시도명으로 시작하니 `sido_of` 에 걸리는데,
+      `orgtype` 이 '시군구'가 아니라 '지방공기업'이라 그대로 광역으로 분류됐다.
+      그 결과 **서대문구 제도가 서울 25개 자치구 전부에 떴다** — 중랑구를 고른
+      사람에게 "서대문구 거주 아동 및 보호자" 대상 제도가 보였다.
+      실측 83건 / 19개 시군구(시설관리공단·도시관리공단·상하수도사업소).
+
+    ⚠️**접두(startswith)로만 맞춘다.** 부분 문자열로 하면 오라벨이 난다 —
+      이 저장소는 이미 '고양산업진흥원'을 경남 양산시로 보낸 적이 있다
+      (`welfare_local/org_region_map.py` 주석).
+    ⚠️**긴 이름부터** 본다. 서울에 '중구'와 '중랑구'가 함께 있어서, 짧은 것부터
+      맞추면 `중랑구시설관리공단` 이 '중구' 로 붙는다.
+    """
+    idx = collections.defaultdict(dict)
+    for r in rows:
+        org = (r.get('org') or '').strip()
+        sd = sido_of(org)
+        if not sd or r.get('orgtype') != '시군구' or org == sd:
+            continue
+        name = org[len(sd):].replace(' ', '')
+        if name:
+            idx[sd][name] = org      # 표준 키는 원본 org 그대로("서울특별시 중랑구")
+    return {sd: sorted(m.items(), key=lambda kv: -len(kv[0])) for sd, m in idx.items()}
+
+
+def sgg_of_branch(org, sd, sgg_index):
+    """산하기관 org 에서 시군구 표준 키를 찾는다. 못 찾으면 None(=광역으로 둔다)."""
+    rest = org.replace(' ', '')[len(sd):]
+    if not rest:
+        return None
+    for name, key in sgg_index.get(sd, ()):
+        if rest.startswith(name):
+            return key
+    return None
 
 
 def _clean(v, limit):
@@ -147,7 +187,9 @@ def main():
         orgmap = {k: tuple(v[:2]) for k, v in
                   json.load(open(orgmap_path, encoding='utf-8')).items()}
 
-    by_sgg, by_sido, skipped = collections.defaultdict(list), collections.defaultdict(list), 0
+    sgg_index = build_sgg_index(rows)
+    by_sgg, by_sido, skipped, branched = (
+        collections.defaultdict(list), collections.defaultdict(list), 0, 0)
     for r in rows:
         if not r.get('personal_benefit'):
             skipped += 1
@@ -157,6 +199,12 @@ def main():
         if sd:
             if r.get('orgtype') == '시군구' and org != sd:
                 by_sgg[org].append(r)
+                continue
+            # 시군구 **산하기관**(공단·사업소)은 그 시군구 것이다 — build_sgg_index 주석 참고.
+            branch = sgg_of_branch(org, sd, sgg_index)
+            if branch:
+                by_sgg[branch].append(r)
+                branched += 1
             else:
                 by_sido[sd].append(r)
             continue
@@ -204,15 +252,23 @@ def main():
         local = [slim(x) for x in sorted(items, key=sort_key)]
         metro = [slim(x) for x in sorted(by_sido.get(sd, []), key=sort_key)]
         fn = f'r{i:04d}.json'
+        # 🚨**지역 파일에 `generated_at` 을 넣지 않는다.** 넣으면 내용이 그대로여도
+        #   매일 228개 파일이 전부 diff 가 나 푸시된다(실측 — 이 파일 맨 위 주석의
+        #   "결과가 같으면 푸시되지 않는다"가 거짓이었다). 시각은 index.json 에만 둔다.
         payload = {
-            'schema': SCHEMA, 'app': 'dongnebokji', 'generated_at': now,
+            'schema': SCHEMA, 'app': 'dongnebokji',
             'region': org, 'sido': sd,
             'count': len(local) + len(metro),
             'local': local, 'metro': metro,
         }
+        body = json.dumps(payload, ensure_ascii=False)
         with open(os.path.join(OUT_DIR, fn), 'w', encoding='utf-8') as fh:
-            json.dump(payload, fh, ensure_ascii=False)
+            fh.write(body)
+        # 🚨**내용 해시를 index 에 싣는다.** 앱은 지역 파일을 캐시하면 다시 받지
+        #   않으므로, 이게 없으면 **데이터를 고쳐도 기존 사용자에게 영영 안 간다.**
+        #   앱이 index 의 해시와 캐시에 적어 둔 해시를 비교해 달라졌을 때만 받는다.
         index.append({'name': org, 'sido': sd, 'file': fn,
+                      'hash': hashlib.sha1(body.encode('utf-8')).hexdigest()[:12],
                       'n_local': len(local), 'n_metro': len(metro)})
 
     with open(os.path.join(OUT_DIR, 'index.json'), 'w', encoding='utf-8') as fh:
@@ -223,6 +279,7 @@ def main():
 
     total = sum(x['n_local'] + x['n_metro'] for x in index)
     print(f'[동네복지] 지역 {len(index)}개 / 제도 {total}건 / 제외 {skipped}건 → {OUT_DIR}')
+    print(f'[동네복지] 시군구 산하기관을 그 시군구로 되돌린 것 {branched}건')
 
 
 if __name__ == '__main__':
