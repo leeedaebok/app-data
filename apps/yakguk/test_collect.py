@@ -100,6 +100,32 @@ def _mois(name, addr, st='영업/정상', tel='02-111-2222', closed='', s='', e=
             '휴업시작일자': s, '휴업종료일자': e, '좌표정보(X)': '', '좌표정보(Y)': '', '관리번호': '1'}
 
 
+def _hira(name, addr, tel='02-111-2222', estb='20100101'):
+    return {'yadmNm': name, 'addr': addr, 'telno': tel, 'estbDd': estb, 'XPos': '127.0', 'YPos': '37.5'}
+
+
+class HolidayMergeTest(unittest.TestCase):
+    google = [
+        {'date': '20260501', 'name': '노동절', 'status': 'holiday?'},
+        {'date': '20260925', 'name': '추석', 'status': 'holiday'},
+        {'date': '20261231', 'name': '가짜 공휴일', 'status': 'holiday?'},
+    ]
+
+    def test_kasi_confirms_what_google_was_unsure_of(self):
+        # 9/11 실측: 천문연이 2026 노동절·제헌절을 isHoliday=Y 로 준다 — 구글 단독일 땐 '확인 필요'였다
+        got = {h['date']: h['status'] for h in C.merge_holidays({'20260501': '노동절', '20260925': '추석'}, self.google)}
+        self.assertEqual(got['20260501'], 'holiday')
+        self.assertEqual(got['20260925'], 'holiday')
+        self.assertEqual(got['20261231'], 'holiday?')  # 구글에만 있는 날은 확정하지 않는다
+
+    def test_kasi_only_day_is_official(self):
+        got = {h['date']: h['status'] for h in C.merge_holidays({'20260717': '제헌절'}, [])}
+        self.assertEqual(got, {'20260717': 'holiday'})
+
+    def test_kasi_failure_falls_back_to_google(self):
+        self.assertEqual(C.merge_holidays(None, self.google), self.google)
+
+
 class VerdictTest(unittest.TestCase):
     today = date(2026, 9, 11)
 
@@ -146,6 +172,48 @@ class VerdictTest(unittest.TestCase):
                                     [_mois('가나약국', '서울특별시 마포구 백범로 1', st='폐업', closed='2015-01-01'),
                                      _mois('가나약국', '서울특별시 마포구 백범로 1')])
         self.assertEqual(got, {'A': 'ok'})
+
+    # ── 3자 판정(S3 심평원) ────────────────────────────────────────────────
+    def verdict3(self, nmc, mois, hira):
+        recs, v, dropped, _ = C.build(nmc, mois, self.today, hira=hira)
+        return {r['id']: r['v'] for r in recs}, v, dropped
+
+    def test_old_closure_absent_in_hira_is_dropped(self):
+        # 9/11 실측: 오래전 폐업 의심 152곳 중 151곳이 S3 에도 없었다 → 셋 중 둘이 "없다"
+        got, _, dropped = self.verdict3([_nmc('A', '가나약국', '서울특별시 마포구 백범로 1', tel='02-999-0000')],
+                                        [_mois('가나약국', '서울특별시 마포구 백범로 1', st='폐업', closed='2017-10-10', tel='02-999-0000')],
+                                        hira=[])
+        self.assertEqual(got, {})
+        self.assertEqual(dropped, ['A'])
+
+    def test_closure_but_hira_established_after_is_reopened(self):
+        got, v, _ = self.verdict3([_nmc('A', '가나약국', '서울특별시 마포구 백범로 1', tel='02-999-0000')],
+                                  [_mois('가나약국', '서울특별시 마포구 백범로 1', st='폐업', closed='2017-10-10', tel='02-999-0000')],
+                                  hira=[_hira('가나약국', '서울특별시 마포구 백범로 1', estb='20180301')])
+        self.assertEqual(got, {'A': 'ok'})
+        self.assertEqual(v['reopened_by_s3'], 1)
+
+    def test_closure_with_hira_established_before_is_flagged(self):
+        # 모순(심평원엔 있는데 개설일이 폐업보다 앞) → 숨기지 않고 표시만
+        got, _, _ = self.verdict3([_nmc('A', '가나약국', '서울특별시 마포구 백범로 1', tel='02-999-0000')],
+                                  [_mois('가나약국', '서울특별시 마포구 백범로 1', st='폐업', closed='2017-10-10', tel='02-999-0000')],
+                                  hira=[_hira('가나약국', '서울특별시 마포구 백범로 1', estb='20150101')])
+        self.assertEqual(got, {'A': 'closed?'})
+
+    def test_unmatched_in_mois_but_in_hira_is_ok(self):
+        got, _, _ = self.verdict3([_nmc('A', '가나약국', '서울특별시 마포구 백범로 1')], [],
+                                  hira=[_hira('가나약국', '서울특별시 마포구 백범로 1')])
+        self.assertEqual(got, {'A': 'ok'})
+
+    def test_resolve_geo(self):
+        h = {'YPos': '37.5000', 'XPos': '127.0000'}
+        # S1 이 S3 와 가깝다 → S1 맞음
+        self.assertEqual(C._resolve_geo(37.5001, 127.0001, 37.6, 127.1, h), 'nmc')
+        # S2 가 S3 와 가깝고 S1 만 멀다 → S3 좌표로 교체
+        self.assertEqual(C._resolve_geo(37.6, 127.1, 37.5001, 127.0001, h), (37.5, 127.0))
+        # 셋 다 어긋남 → 모름
+        self.assertIsNone(C._resolve_geo(37.6, 127.1, 37.7, 127.2, h))
+        self.assertIsNone(C._resolve_geo(37.6, 127.1, 37.7, 127.2, None))
 
     def test_lunch_and_call_flags_on_record(self):
         recs, _, _, _ = C.build([_nmc('A', '가나약국', '서울특별시 마포구 백범로 1', etc='평일 휴게시간 13:00-14:00 / 공휴일은 전화확인하세요')],

@@ -6,7 +6,9 @@
 소스
   S1 국립중앙의료원 약국 FullData (data.go.kr 15000576) — 운영시간의 유일한 원천
   S2 행정안전부 인허가 건강_약국 CSV (data.go.kr 15045036) — 영업상태·폐업·휴업
-  S5 구글 공개 한국 공휴일 달력(ICS) — 공휴일·대체공휴일 (S4 한국천문연구원은 활용신청 후 추가)
+  S3 건강보험심사평가원 약국정보 (data.go.kr 15001673) — 존재·개설일·좌표. 폐업 의심·좌표 어긋남의 캐스팅보트
+  S4 한국천문연구원 특일 정보 (data.go.kr 15012690) — 관공서 공휴일 1차 기준
+  S5 구글 공개 한국 공휴일 달력(ICS) — 공휴일 대조군(S4 장애 시 대체)
 
 주간 실행: refresh.bat 은 매일 돌지만 직전 발행 6일 이내면 즉시 건너뛴다. 강제는 --force.
 
@@ -53,6 +55,10 @@ MOIS_URL = 'https://file.localdata.go.kr/file/download/pharmacies/info'
 MOIS_REFERER = 'https://file.localdata.go.kr/file/pharmacies/info'
 ICS_URL = ('https://calendar.google.com/calendar/ical/'
            'ko.south_korea%23holiday%40group.v.calendar.google.com/public/basic.ics')
+# S3 심평원 약국정보(15001673) — 존재 여부·개설일·좌표(WGS84). 이용허락: 공공누리 1유형(출처표시)
+HIRA_URL = 'https://apis.data.go.kr/B551182/pharmacyInfoService/getParmacyBasisList'
+# S4 한국천문연구원 특일 정보(15012690) — 관공서 공휴일·대체공휴일의 1차 기준
+KASI_URL = 'https://apis.data.go.kr/B090041/openapi/service/SpcdeInfoService/getRestDeInfo'
 UA = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
       '(KHTML, like Gecko) Chrome/125.0 Safari/537.36')
 
@@ -242,6 +248,57 @@ CONFIRMED_HOLIDAY_NAMES = ('새해첫날', '삼일절', '어린이날', '부처�
 FIXED_MMDD = ('0101', '0301', '0505', '0606', '0815', '1003', '1009', '1225')
 
 
+def fetch_hira(key):
+    items, page, total = [], 1, None
+    while True:
+        r = _get(f'{HIRA_URL}?serviceKey={key}&pageNo={page}&numOfRows=1000')
+        root = ET.fromstring(r.content)
+        code = root.findtext('header/resultCode')
+        if code != '00':
+            raise RuntimeError(f'S3 API resultCode={code} {root.findtext("header/resultMsg")}')
+        total = int(root.findtext('body/totalCount') or 0)
+        batch = [{c.tag: (c.text or '').strip() for c in it} for it in root.iter('item')]
+        items.extend(batch)
+        if not batch or len(items) >= total:
+            break
+        page += 1
+        time.sleep(0.3)
+    return items, total
+
+
+def fetch_kasi(key, years):
+    """{YYYYMMDD: 이름}. 대체공휴일은 관보 공포 뒤에야 올라온다 — 내년 것은 비어 있을 수 있다."""
+    out = {}
+    for y in years:
+        r = _get(f'{KASI_URL}?serviceKey={key}&solYear={y}&numOfRows=100&_type=json')
+        body = r.json()['response']
+        if body['header']['resultCode'] != '00':
+            raise RuntimeError(f'S4 API {body["header"]}')
+        items = (body.get('body', {}).get('items') or {}).get('item') or []
+        if isinstance(items, dict):  # 1건이면 배열이 아니라 객체로 온다
+            items = [items]
+        for it in items:
+            if it.get('isHoliday') == 'Y':
+                out[str(it['locdate'])] = it['dateName']
+    return out
+
+
+def merge_holidays(kasi, google):
+    """CROSS_VALIDATION 4절. S4(천문연)가 1차 기준, S5(구글)는 대조군.
+    둘 다 → holiday · 천문연만 → holiday(공식) · 구글만 → holiday?(앱이 평일·공휴일을 둘 다 보여준다).
+    천문연을 못 받았으면(kasi=None) 구글의 이름 규칙으로 확정/불확실을 가른다."""
+    if kasi is None:
+        return google
+    g = {h['date']: h for h in google}
+    out = {}
+    for d, name in kasi.items():
+        out[d] = {'date': d, 'name': name, 'status': 'holiday', 'src': 'kasi+google' if d in g else 'kasi'}
+    for d, h in g.items():
+        if d not in out:
+            out[d] = {'date': d, 'name': h['name'], 'status': 'holiday?', 'src': 'google'}
+    return [out[k] for k in sorted(out)]
+
+
 def fetch_holidays(today):
     r = _get(ICS_URL, headers={'User-Agent': UA})
     text = r.content.decode('utf-8')
@@ -263,7 +320,35 @@ def fetch_holidays(today):
 
 
 # ── 조립·교차검증 ─────────────────────────────────────────────────────────────
-def build(nmc, mois, today):
+class HiraIndex:
+    """S3 짝찾기. 이름+도로명 → 전화+이름앞2자 순(S2 와 같은 규칙)."""
+
+    def __init__(self, hira):
+        self.by_key = collections.defaultdict(list)
+        self.by_phone = collections.defaultdict(list)
+        for h in hira or []:
+            self.by_key[(key_name(h.get('yadmNm')), key_road(h.get('addr')))].append(h)
+            p = key_phone(h.get('telno'))
+            if p:
+                self.by_phone[p].append(h)
+
+    def find(self, name, addr, tel):
+        c = self.by_key.get((key_name(name), key_road(addr)))
+        if c:
+            return c[0]
+        c = [h for h in self.by_phone.get(key_phone(tel), []) if key_name(h.get('yadmNm'))[:2] == key_name(name)[:2]]
+        return c[0] if c else None
+
+
+def _ymd(s):
+    """'20240112' → '2024-01-12' (인허가 날짜 형식과 맞춘다)."""
+    s = re.sub(r'\D', '', s or '')
+    return f'{s[:4]}-{s[4:6]}-{s[6:8]}' if len(s) == 8 else ''
+
+
+def build(nmc, mois, today, hira=None):
+    """hira=None 이면 두 소스(S1×S2) 규칙, 목록이 오면 세 소스 규칙(CROSS_VALIDATION 2-2)."""
+    hidx = HiraIndex(hira) if hira is not None else None
     idx_key = collections.defaultdict(list)
     idx_phone = collections.defaultdict(list)
     for r in mois:
@@ -292,7 +377,11 @@ def build(nmc, mois, today):
             how = 'phone' if cand else None
 
         v, extra = 'unmatched', {}
+        h = hidx.find(it.get('dutyName'), it.get('dutyAddr'), it.get('dutyTel1')) if hidx else None
+        if hidx is not None:
+            verdict['s3_matched' if h else 's3_unmatched'] += 1
         if cand:
+            verdict['s2_matched'] += 1
             best = sorted(cand, key=lambda r: r['영업상태명'] != '영업/정상')[0]
             matched_mois_ids.add(id(best))
             st = best['영업상태명']
@@ -305,24 +394,45 @@ def build(nmc, mois, today):
                 else:
                     v = 'ok'
             elif st == '폐업':
+                closed_on = best.get('폐업일자') or ''
                 reopened = [r for r in idx_phone.get(key_phone(it.get('dutyTel1')), []) if r['영업상태명'] == '영업/정상']
                 if reopened:
                     v = 'ok'  # 같은 전화로 영업 중인 인허가가 따로 있다 = 이름·주소만 바뀐 것
-                elif (best.get('폐업일자') or '') >= cutoff_closed:
+                elif hidx is not None:
+                    # 3자 판정(9/11 실측: 폐업 의심 178곳 중 177곳이 S3 에도 없었다)
+                    if h is None:
+                        v = 'closed'  # S2 폐업 + S3 없음 = 셋 중 둘이 "없다"
+                    elif _ymd(h.get('estbDd')) > closed_on:
+                        v = 'ok'  # S3 개설일이 폐업 뒤 = 재개업
+                        verdict['reopened_by_s3'] += 1
+                    else:
+                        v, extra = 'closed?', {'closedOn': closed_on or None}  # 모순 — 표시만
+                elif closed_on >= cutoff_closed:
                     v = 'closed'
                 else:
-                    v, extra = 'closed?', {'closedOn': best.get('폐업일자') or None}
+                    v, extra = 'closed?', {'closedOn': closed_on or None}
             else:
                 v = 'closed?'
             # 좌표 대조 (S2 는 EPSG:5174 라 변환이 필요 — pyproj 가 없으면 건너뛴다)
             if v in ('ok', 'suspended') and _TO_WGS and best.get('좌표정보(X)') and best.get('좌표정보(Y)'):
                 try:
                     lon, lat = _TO_WGS.transform(float(best['좌표정보(X)']), float(best['좌표정보(Y)']))
-                    if haversine(float(it['wgs84Lat']), float(it['wgs84Lon']), lat, lon) > 1000:
-                        extra['geo'] = '?'
-                        verdict['geo?'] += 1
+                    a, b = float(it['wgs84Lat']), float(it['wgs84Lon'])
+                    if haversine(a, b, lat, lon) > 1000:
+                        fixed = _resolve_geo(a, b, lat, lon, h)
+                        if fixed == 'nmc':
+                            verdict['geo_nmc_ok'] += 1
+                        elif fixed:
+                            # S2·S3 가 서로 가깝고 S1 만 멀다 = S1 좌표가 틀렸다(9/11 실측 255/263)
+                            extra['fixLat'], extra['fixLon'] = fixed
+                            verdict['geo_fixed'] += 1
+                        else:
+                            extra['geo'] = '?'
+                            verdict['geo?'] += 1
                 except (ValueError, KeyError):
                     pass
+        elif h is not None:
+            v = 'ok'  # S2 에 짝이 없어도 S3 에 있으면 영업 중인 요양기관이다
         verdict[v] += 1
         if v == 'closed':
             dropped.append(it.get('hpid'))
@@ -356,6 +466,24 @@ def build(nmc, mois, today):
     return recs, verdict, dropped, unknown_region
 
 
+GEO_AGREE_M = 200
+
+
+def _resolve_geo(nlat, nlon, mlat, mlon, h):
+    """S1·S2 가 1km+ 어긋날 때 S3 로 가른다. 'nmc'(S1 맞음) · (lat, lon)(S3 좌표로 교체) · None(모름)."""
+    if not h:
+        return None
+    try:
+        hlat, hlon = float(h['YPos']), float(h['XPos'])
+    except (KeyError, ValueError):
+        return None
+    if haversine(nlat, nlon, hlat, hlon) < GEO_AGREE_M:
+        return 'nmc'
+    if haversine(mlat, mlon, hlat, hlon) < GEO_AGREE_M:
+        return round(hlat, 6), round(hlon, 6)
+    return None
+
+
 def make_rec(it, sido, sgg, v, extra):
     t = []
     for i in range(1, 9):
@@ -380,6 +508,10 @@ def make_rec(it, sido, sgg, v, extra):
         rec['call'] = True
     if is_public_night(it.get('dutyName'), inf, etc):
         rec['night'] = True
+    fix = (extra.pop('fixLat', None), extra.pop('fixLon', None))
+    if fix[0] is not None:
+        rec['lat'], rec['lon'] = fix
+        rec['geoFixed'] = True  # 앱 표시용 아님 — 검증·추적용
     rec.update({k: val for k, val in extra.items() if val is not None})
     return rec
 
@@ -392,7 +524,7 @@ except Exception:  # pyproj 없으면 좌표 대조·S2 전용 약국을 건너�
 
 
 # ── 가드 ──────────────────────────────────────────────────────────────────────
-def guards(nmc, nmc_total, recs, verdict, holidays, prev, today):
+def guards(nmc, nmc_total, recs, verdict, holidays, prev, today, hira=None, hira_total=None):
     g = []
 
     def add(name, ok, value, rule):
@@ -410,8 +542,21 @@ def guards(nmc, nmc_total, recs, verdict, holidays, prev, today):
     weekday = sum(1 for i in nmc if i.get('dutyTime1s') and i.get('dutyTime1c'))
     add('weekday_hours_fill', weekday / max(n, 1) >= 0.95, f'{weekday / max(n, 1):.1%}', '월요일 운영시간 기재율 ≥ 95%')
 
-    matched = sum(verdict[k] for k in ('ok', 'suspended', 'closed', 'closed?'))
+    matched = verdict['s2_matched']
     add('s1_s2_match', matched / max(n, 1) >= 0.95, f'{matched / max(n, 1):.1%}', 'S1↔S2 짝 비율 ≥ 95%')
+    if hira is not None:
+        hn = len(hira)
+        add('s3_complete', hn == hira_total and hn > 0, f'{hn}/{hira_total}', 'S3 받은 수 == totalCount')
+        prev_h = prev.get('hira_total') if prev else None
+        if prev_h:
+            ch = abs(hn - prev_h) / prev_h
+            add('s3_total_change', ch <= 0.03, f'{hn} vs {prev_h} ({ch:.1%})', 'S3 직전 대비 ±3%')
+        else:
+            add('s3_total_min', hn >= 20000, hn, 'S3 첫 발행 ≥ 20,000')
+        m3 = verdict['s3_matched']
+        add('s1_s3_match', m3 / max(n, 1) >= 0.95, f'{m3 / max(n, 1):.1%}', 'S1↔S3 짝 비율 ≥ 95% (9/11 98.1%)')
+        gf = verdict['geo_fixed']
+        add('geo_fixed_ratio', gf / max(n, 1) <= 0.03, gf, 'S3 로 좌표 교체 ≤ 3% (9/11 약 1%)')
     cl = verdict['closed'] + verdict['closed?']
     add('closed_ratio', cl / max(n, 1) <= 0.02, f'{cl} ({cl / max(n, 1):.2%})', '폐업·폐업의심 ≤ 2%')
     add('suspended_ratio', verdict['suspended'] / max(n, 1) <= 0.01, verdict['suspended'], '휴업 ≤ 1%')
@@ -452,6 +597,7 @@ def load_prev():
     try:
         idx = json.load(open(p, encoding='utf-8'))
         return {'generated_at': idx.get('generated_at'), 'nmc_total': idx.get('basis', {}).get('nmc_total'),
+                'hira_total': idx.get('basis', {}).get('hira_total'),
                 'sido_counts': {r['name']: r['count'] for r in idx.get('regions', [])}}
     except Exception:
         return None
@@ -484,7 +630,7 @@ def publish(recs, holidays, basis, now):
     dump(os.path.join(OUT_DIR, 'holidays.json'),
          {'schema': SCHEMA, 'app': APP, 'count': len(holidays), 'holidays': holidays})
     dump(os.path.join(OUT_DIR, 'index.json'), {
-        'schema': SCHEMA, 'app': APP, 'source': 'nmc+mois', 'generated_at': now,
+        'schema': SCHEMA, 'app': APP, 'source': 'nmc+mois+hira', 'generated_at': now,
         'basis': basis, 'count': sum(r['count'] for r in regions), 'regions': regions,
     })
     return regions
@@ -513,14 +659,27 @@ def main():
         print(f'[약국] S1 {len(nmc)}/{nmc_total} ({time.time() - t0:.0f}s)')
         mois = fetch_mois()
         print(f'[약국] S2 {len(mois)}행')
-        holidays = fetch_holidays(today)
-        print(f'[약국] 공휴일 {len(holidays)}일 (확정 {sum(h["status"] == "holiday" for h in holidays)})')
+        # S3 는 못 받으면 발행을 건너뛴다 — 없이 내면 폐업 판정 규칙이 두 소스로 돌아가
+        # 주마다 약국이 사라졌다 나타났다 한다(판정이 흔들리는 것보다 한 주 늦은 게 낫다)
+        hira, hira_total = fetch_hira(key)
+        print(f'[약국] S3 {len(hira)}/{hira_total}')
+        google = fetch_holidays(today)
+        try:
+            kasi = fetch_kasi(key, (today.year, today.year + 1))
+        except Exception as e:  # 공휴일 공식 소스 장애는 치명적이지 않다 — 구글 이름 규칙으로 물러난다
+            print('[약국] S4 실패, S5 로 물러남:', e)
+            kasi = None
+        holidays = merge_holidays(kasi, google)
+        val['holidays'] = {'kasi': None if kasi is None else len(kasi), 'google': len(google),
+                           'unsure': [h['date'] + ' ' + h['name'] for h in holidays if h['status'] != 'holiday']}
+        print(f'[약국] 공휴일 {len(holidays)}일 (확정 {sum(h["status"] == "holiday" for h in holidays)}, '
+              f'천문연 {val["holidays"]["kasi"]})')
 
-        recs, verdict, dropped, unknown_region = build(nmc, mois, today)
+        recs, verdict, dropped, unknown_region = build(nmc, mois, today, hira=hira)
         val['verdicts'] = dict(verdict)
         val['dropped_closed'] = len(dropped)
         val['unknown_region'] = unknown_region
-        g = guards(nmc, nmc_total, recs, verdict, holidays, prev, today)
+        g = guards(nmc, nmc_total, recs, verdict, holidays, prev, today, hira=hira, hira_total=hira_total)
         val['guards'] = g
         failed = [x for x in g if not x['ok']]
         if not _TO_WGS:
@@ -536,8 +695,9 @@ def main():
             return 0
         else:
             mois_upd = max((r.get('데이터갱신시점') or '' for r in mois), default='')
-            basis = {'nmc_total': len(nmc), 'nmc_fetched_at': now, 'mois_updated_at': mois_upd,
-                     'holidays_source': 'google_ics'}
+            basis = {'nmc_total': len(nmc), 'hira_total': len(hira), 'nmc_fetched_at': now,
+                     'mois_updated_at': mois_upd,
+                     'holidays_source': 'kasi+google_ics' if kasi is not None else 'google_ics'}
             regions = publish(recs, holidays, basis, now)
             val['published'] = True
             val['sido_counts'] = {r['name']: r['count'] for r in regions}
