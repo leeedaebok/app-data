@@ -26,6 +26,13 @@ https://raw.githubusercontent.com/leeedaebok/app-data/master/data/<앱>/<파일>
 |---|---|---|---|
 | gonggoalimi | `data/gonggoalimi/notices.json` | 모집중 사업공고 | K-Startup (data.go.kr 15125364) |
 | dongnebokji | `data/dongnebokji/index.json` + `r0000~r0226.json` | 시군구별 복지 제도 227개 지역 | 보조금24(15113968) + 복지로(B554287) |
+| yakguk | `data/yakguk/index.json` + `s_<시도>.json` 16개 + `holidays.json` + `validation.json` | 전국 약국 운영시간 + 영업상태 교차검증 (**주 1회**) | 국립중앙의료원 약국(15000576) × 행안부 인허가 약국(15045036) + 공휴일 ICS |
+
+⚠️ **yakguk 수집기는 실패해도 exit 0 이다.** 이 저장소의 `refresh.bat` 은 수집기 하나라도 실패하면
+모든 앱의 푸시를 막기 때문에, 약국 API 장애가 다른 앱 갱신을 멈추지 않게 했다. 대신 가드에 걸리면
+약국 파일은 그대로 두고 `data/yakguk/validation.json` 의 `published=false` 와 `reasons` 로만 알린다.
+교차검증 규칙·가드 기준은 `D:\claude_workspace\yakguk\docs\CROSS_VALIDATION.md` 가 1차 출처.
+`pyproj` 필요(`pip install pyproj`, 인허가 좌표가 EPSG:5174). 단위 테스트: `python -m unittest apps/yakguk/test_collect.py`.
 
 ⚠️ **dongnebokji 는 다른 앱과 달리 여기서 OpenAPI 를 직접 치지 않는다.** 원본 수집과
 LLM 구조화가 무거워서(9,909건) `autoblog_local/welfare_local/` 에 따로 있고, 여기
