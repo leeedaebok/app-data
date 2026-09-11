@@ -224,5 +224,39 @@ class VerdictTest(unittest.TestCase):
         self.assertEqual(recs[0]['t'][6], '')  # 일요일 미기재
 
 
+class PublishIntervalTest(unittest.TestCase):
+    # 실제 holidays.json 형식(하이픈 없음)
+    H = [{'date': '20260924', 'status': 'holiday', 'name': '추석'},
+         {'date': '20260925', 'status': 'holiday', 'name': '추석'},
+         {'date': '20261003', 'status': 'holiday', 'name': '개천절'}]
+
+    def test_weekly_when_no_holiday_near(self):
+        self.assertEqual(C.publish_interval_days(date(2026, 9, 1), self.H), C.PUBLISH_INTERVAL_DAYS)
+
+    def test_daily_within_lookahead(self):
+        self.assertEqual(C.publish_interval_days(date(2026, 9, 14), self.H), 1)   # 추석 10일 전
+        self.assertEqual(C.publish_interval_days(date(2026, 9, 25), self.H), 1)   # 당일
+
+    def test_boundary_day_before_lookahead(self):
+        self.assertEqual(C.publish_interval_days(date(2026, 9, 13), self.H), C.PUBLISH_INTERVAL_DAYS)  # 11일 전
+
+    def test_past_holiday_does_not_count(self):
+        self.assertEqual(C.publish_interval_days(date(2026, 10, 4), self.H), C.PUBLISH_INTERVAL_DAYS)
+
+    def test_hyphen_format_also_accepted(self):
+        self.assertEqual(C.publish_interval_days(date(2026, 9, 20), [{'date': '2026-09-25'}]), 1)
+
+    def test_real_published_file_has_chuseok_in_range(self):
+        # 발행된 파일로 — 형식을 짐작해 테스트를 짜면 초록불이 거짓말을 한다
+        h = C.load_prev_holidays()
+        if not h:
+            self.skipTest('발행 파일 없음')
+        self.assertEqual(C.publish_interval_days(date(2026, 9, 15), h), 1)
+
+    def test_bad_or_missing_holidays_fall_back_to_weekly(self):
+        self.assertEqual(C.publish_interval_days(date(2026, 9, 20), None), C.PUBLISH_INTERVAL_DAYS)
+        self.assertEqual(C.publish_interval_days(date(2026, 9, 20), [{'date': 'x'}, {}]), C.PUBLISH_INTERVAL_DAYS)
+
+
 if __name__ == '__main__':
     unittest.main()

@@ -11,6 +11,8 @@
   S5 구글 공개 한국 공휴일 달력(ICS) — 공휴일 대조군(S4 장애 시 대체)
 
 주간 실행: refresh.bat 은 매일 돌지만 직전 발행 6일 이내면 즉시 건너뛴다. 강제는 --force.
+  단 공휴일이 10일 안에 있으면 **매일** 발행한다(publish_interval_days) — 명절 당번·임시 운영이 늦게 올라와도
+  한 주를 놓치지 않게. 명절이 이 앱을 가장 많이 쓰는 때다(2026-09-11 운영자 승인).
 
 🚨 이 수집기는 실패해도 exit 1 하지 않는다. refresh.bat 은 수집기 하나라도 실패하면
    **모든 앱의 푸시를 막는다** — 약국 API 장애가 공고알리미·동네복지까지 멈추게 된다.
@@ -49,6 +51,7 @@ KST = timezone(timedelta(hours=9))
 SCHEMA = 1
 APP = 'yakguk'
 PUBLISH_INTERVAL_DAYS = 6
+HOLIDAY_LOOKAHEAD_DAYS = 10   # 이 안에 공휴일이 있으면 간격을 1일로
 
 NMC_URL = 'https://apis.data.go.kr/B552657/ErmctInsttInfoInqireService/getParmacyFullDown'
 MOIS_URL = 'https://file.localdata.go.kr/file/download/pharmacies/info'
@@ -590,6 +593,30 @@ def dump(path, obj):
     return body
 
 
+def publish_interval_days(today, holidays):
+    """발행 간격(일). 오늘부터 [HOLIDAY_LOOKAHEAD_DAYS] 안에 공휴일(확정·불확실 모두)이 있으면 1, 아니면 주간.
+    holidays = 지난 발행의 holidays.json 목록([{date:'YYYYMMDD', status, name}]). 못 읽으면 주간.
+    ⚠️발행 파일의 날짜는 **하이픈 없는 YYYYMMDD** 다 — 처음에 'YYYY-MM-DD' 로 짐작해 짰더니 실제 파일에서 추석을
+      하나도 못 찾았다(테스트도 짐작한 형식으로 써서 초록불이었다). 둘 다 받는다."""
+    end = today + timedelta(days=HOLIDAY_LOOKAHEAD_DAYS)
+    for h in holidays or []:
+        try:
+            d = datetime.strptime(str(h['date']).replace('-', ''), '%Y%m%d').date()
+        except (KeyError, TypeError, ValueError):
+            continue
+        if today <= d <= end:
+            return 1
+    return PUBLISH_INTERVAL_DAYS
+
+
+def load_prev_holidays():
+    p = os.path.join(OUT_DIR, 'holidays.json')
+    try:
+        return json.load(open(p, encoding='utf-8')).get('holidays', [])
+    except (OSError, ValueError):
+        return []
+
+
 def load_prev():
     p = os.path.join(OUT_DIR, 'index.json')
     if not os.path.exists(p):
@@ -647,9 +674,13 @@ def main():
     prev = load_prev()
     if prev and prev.get('generated_at') and not a.force:
         last = datetime.fromisoformat(prev['generated_at'])
-        if now_dt - last < timedelta(days=PUBLISH_INTERVAL_DAYS):
-            print(f'[약국] 직전 발행 {prev["generated_at"][:10]} — 주간 간격 전이라 건너뜀')
+        interval = publish_interval_days(today, load_prev_holidays())
+        # 20시간: 매일 04시 실행이 몇 분 늦게 돌아도 '1일' 간격에 걸려 하루를 통째로 거르지 않게
+        if now_dt - last < (timedelta(hours=20) if interval == 1 else timedelta(days=interval)):
+            print(f'[약국] 직전 발행 {prev["generated_at"][:10]} — 발행 간격({interval}일) 전이라 건너뜀')
             return 0
+        if interval == 1:
+            print(f'[약국] 공휴일 {HOLIDAY_LOOKAHEAD_DAYS}일 이내 — 매일 발행')
 
     val = {'generated_at': now, 'published': False, 'reasons': [], 'guards': [], 'verdicts': {}}
     try:
