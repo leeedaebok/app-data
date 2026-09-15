@@ -161,7 +161,57 @@ def load_match_fix():
     return json.load(open(p, encoding='utf-8'))
 
 
+def load_support_conditions():
+    """보조금24 JA 연령 코드 {서비스ID: (JA0110, JA0111)}.
+
+    welfare_local/fetch_support_conditions.py 산출. 없으면 코드 경로는 건너뛴다.
+    """
+    p = os.getenv('WELFARE_SC') or os.path.join(SRC_DIR, 'supportConditions.json')
+    if not os.path.exists(p):
+        print(f'[동네복지] 경고: supportConditions.json 없음({p}) — JA 연령 코드 미사용',
+              file=sys.stderr)
+        return {}
+    return {s['서비스ID']: (s.get('JA0110'), s.get('JA0111'))
+            for s in json.load(open(p, encoding='utf-8'))}
+
+
+def apply_age_fill(rows, LIST, DET, sc, write):
+    """비어 있는 나이를 보수적으로 채운다(age_fill.py). write=False 면 세기만 한다."""
+    sys.path.insert(0, HERE)
+    from age_fill import fill_age
+    n = collections.Counter()
+    for r in rows:
+        src, dt = LIST.get(r.get('id'), {}), DET.get(r.get('id'), {})
+        text = '\n'.join(str(v) for v in (
+            dt.get('지원대상') or src.get('지원대상'),
+            dt.get('선정기준') or src.get('선정기준')) if v)
+        got = fill_age(r, text, sc.get(r.get('id')))
+        if not got:
+            continue
+        n[got[2]] += 1
+        if write:
+            lo, hi, source = got
+            if lo is not None:
+                r['age_min'] = lo
+            if hi is not None:
+                r['age_max'] = hi
+    return n
+
+
+def _age_stats(rows):
+    yt = [r for r in rows if r.get('personal_benefit')
+          and set(r.get('target_groups') or []) & {'청소년', '청년'}]
+    empty = sum(1 for r in yt if r.get('age_min') is None and r.get('age_max') is None)
+    return len(yt), empty
+
+
 def main():
+    # ⚠️나이 채움은 **기본 꺼짐**(2026-09-15). refresh.bat 이 매일 04시에 이 스크립트를 돌려
+    #   바뀐 결과를 바로 푸시하므로, 켜는 순간이 곧 배포다. 운영자가 결과를 보고 켤 것:
+    #   `set DONGNE_AGE_FILL=1` 또는 `--age-fill`. 미리 보기는 `--dry-run`(파일을 안 쓴다).
+    dry_run = '--dry-run' in sys.argv
+    # 2026-09-15 기본 켬(운영자 위임 — 49건 원문 대조 후). 끄려면 `--no-age-fill` 또는 `DONGNE_AGE_FILL=0`.
+    age_fill_on = not ('--no-age-fill' in sys.argv or os.getenv('DONGNE_AGE_FILL') == '0')
     rows = load_rows()
     LIST, DET = load_source_text()
     TAGFIX = load_tag_fix()
@@ -181,6 +231,21 @@ def main():
                 fixed += 1
             r['target_groups'] = f['target_groups']
     print(f'[동네복지] 태그 교정 적용 {fixed}건 / 교정본 {len(TAGFIX)}건')
+    empty_before = {r.get('id') for r in rows
+                    if r.get('age_min') is None and r.get('age_max') is None}
+    if age_fill_on or dry_run:
+        yt, before = _age_stats(rows)
+        n = apply_age_fill(rows, LIST, DET, load_support_conditions(), write=True)
+        _, after = _age_stats(rows)
+        print(f'[동네복지] 나이 채움 {"(dry-run)" if dry_run else ""} 본문 {n["text"]}건 · '
+              f'JA코드 {n["ja"]}건 / 청소년·청년 {yt}건 중 무연령 {before} → {after}')
+        if dry_run:
+            dump = os.getenv('DONGNE_AGE_DUMP')
+            if dump:
+                with open(dump, 'w', encoding='utf-8') as fh:
+                    json.dump([{k: r.get(k) for k in ('id', 'name', 'target_groups',
+                                                       'age_min', 'age_max')}
+                               for r in rows], fh, ensure_ascii=False)
     orgmap_path = os.path.join(SRC_DIR, 'org_map.json')
     orgmap = {}
     if os.path.exists(orgmap_path):
@@ -217,6 +282,21 @@ def main():
 
     if len(by_sgg) < 200:
         die(f'시군구가 {len(by_sgg)}개뿐입니다(정상 227). 지역 매칭이 깨졌을 수 있습니다.')
+
+    if dry_run:
+        # 지역 파일에 실제로 실리는 것만 센다(시군구가 없는 시도의 광역 제도는 안 실린다).
+        sidos = {sido_of(o) for o in by_sgg}
+        emitted = {id(r): r for items in (*by_sgg.values(),
+                                          *(v for k, v in by_sido.items() if k in sidos))
+                   for r in items}
+        uniq = {r.get('id'): r for r in emitted.values()}.values()
+        yt, empty = _age_stats(list(uniq))
+        was = sum(1 for r in uniq if r.get('personal_benefit')
+                  and set(r.get('target_groups') or []) & {'청소년', '청년'}
+                  and r.get('id') in empty_before)
+        print(f'[동네복지] dry-run: 배포 대상(고유) 청소년·청년 {yt}건 중 무연령 '
+              f'{was} → {empty}건 — 파일은 쓰지 않았다')
+        return
 
     os.makedirs(OUT_DIR, exist_ok=True)
     for old in glob.glob(os.path.join(OUT_DIR, 'r*.json')):
