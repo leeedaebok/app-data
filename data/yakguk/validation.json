@@ -1,1 +1,1 @@
-{"generated_at":"2026-09-30T04:02:25+09:00","published":false,"reasons":["exception"],"guards":[],"verdicts":{},"holidays":{"kasi":46,"google":45,"unsure":[]},"error":"KeyError: 'wgs84Lat'"}
+{"generated_at":"2026-10-01T04:00:12+09:00","published":false,"reasons":["exception"],"guards":[],"verdicts":{},"error":"RuntimeError: S3 API resultCode=99 weblogic.common.resourcepool.ResourceLimitException: No resources currently available in pool dsOpenapi to allocate to applications, please increase the size of the pool and retry.."}
