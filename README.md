@@ -28,6 +28,10 @@ https://raw.githubusercontent.com/leeedaebok/app-data/master/data/<앱>/<파일>
 | dongnebokji | `data/dongnebokji/index.json` + `r0000~r0226.json` | 시군구별 복지 제도 227개 지역 | 보조금24(15113968) + 복지로(B554287) |
 | yakguk | `data/yakguk/index.json` + `s_<시도>.json` 16개 + `holidays.json` + `validation.json` | 전국 약국 운영시간 + 영업상태 교차검증 (**주 1회**) | 국립중앙의료원 약국(15000576) × 행안부 인허가 약국(15045036) + 공휴일 ICS |
 
+🚨 **여기에 앱을 더하면 `autoblog_local/app_api_health.py` 의 `build_checks()` 에도 같이 더할 것.**
+수집이 멈춰도 파일은 깃에 그대로 남아 앱은 낡은 자료를 계속 보여 준다 — 생성시각을 보는 감시가 없으면 아무도 모른다.
+2026-10-05 까지 세 앱 중 gonggoalimi 만 감시되고 있었다(그날 yakguk·dongnebokji 편입).
+
 ⚠️ **yakguk 수집기는 실패해도 exit 0 이다.** 이 저장소의 `refresh.bat` 은 수집기 하나라도 실패하면
 모든 앱의 푸시를 막기 때문에, 약국 API 장애가 다른 앱 갱신을 멈추지 않게 했다. 대신 가드에 걸리면
 약국 파일은 그대로 두고 `data/yakguk/validation.json` 의 `published=false` 와 `reasons` 로만 알린다.

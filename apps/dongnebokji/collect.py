@@ -4,7 +4,8 @@
 다른 앱의 collect.py 와 달리 **여기서 OpenAPI 를 직접 치지 않는다.**
 원본 수집과 LLM 구조화는 무거워서(9,909건 × sonnet) 별도 파이프라인에 있다:
 
-    autoblog_local/welfare_local/extract_worker.py   ← 월 1회 수동 실행
+    autoblog_local/welfare_local/fetch_services.py   ← 원문 캐시 갱신(월 1회 수동)
+    autoblog_local/welfare_local/extract_worker.py   ← 신규·원문이 바뀐 것만 다시 구조화
     autoblog_local/welfare_local/data/out_*.jsonl    ← 그 산출물
 
 이 스크립트는 그 산출물을 읽어 **배포용 지역 파일로 굽는 일만** 한다.
@@ -52,7 +53,11 @@ def load_rows():
     if not files:
         die(f'추출본이 없습니다: {SRC_DIR}\\out_*.jsonl '
             f'(welfare_local/extract_worker.py 를 먼저 돌릴 것)')
-    rows, seen = [], set()
+    # 🚨같은 id 가 여러 줄이면 **가장 나중에 구조화한 줄**을 쓴다(2026-10-05). 워커는 원문이
+    #   바뀐 제도를 다시 구조화해 덧붙이는데, 예전처럼 먼저 읽힌 줄을 쓰면 새 결과가 영영 안 실린다.
+    #   ⚠️"나중"은 줄에 적힌 `ts`(구조화 시각)로 가른다. 파일 순서나 수정 시각으로 가르면
+    #     워커 수를 바꾸거나 깃에서 다시 받는 순간 뒤집힌다. `ts` 가 없는 옛 줄은 가장 오래된 것.
+    by_id = {}
     for f in files:
         with open(f, encoding='utf-8') as fh:
             for line in fh:
@@ -60,10 +65,13 @@ def load_rows():
                     r = json.loads(line)
                 except Exception:
                     continue
-                if r.get('id') in seen:
+                rid = r.get('id')
+                if not rid:
                     continue
-                seen.add(r['id'])
-                rows.append(r)
+                old = by_id.get(rid)
+                if old is None or (r.get('ts') or '') >= (old.get('ts') or ''):
+                    by_id[rid] = r
+    rows = list(by_id.values())
     if len(rows) < 5000:
         die(f'추출본이 너무 적습니다({len(rows)}건). 잘린 파일일 수 있습니다.')
     return rows
@@ -130,6 +138,37 @@ def load_source_text():
     L = {s['서비스ID']: s for s in json.load(open(lst, encoding='utf-8'))}
     D = {d['서비스ID']: d for d in json.load(open(det, encoding='utf-8'))}
     return L, D
+
+
+def sync_with_source(rows, LIST, DET):
+    """추출본을 **지금의 원문 캐시**에 맞춘다 — 없어진 제도는 빼고, 베껴 둔 값은 새로 읽는다.
+
+    2026-10-05 실측(9/2 캐시 → 10/5): 지역형 제도 **60건이 보조금24 에서 없어졌는데** 앱은
+    계속 보여 주고 있었다. 추출본(out_*.jsonl)은 쌓이기만 하고 지우는 곳이 없어서다.
+    또 신청기한·문의처·접수기관·신청 URL 은 **추출하던 날의 값**이 줄에 박혀 있어, 원문에서
+    바뀌어도(같은 기간 신청기한 58건·전화 121건) 따라오지 않았다. LLM 이 만든 값이 아니라
+    그대로 베낀 값이므로 다시 구조화할 필요 없이 여기서 덮는다.
+
+    ⚠️원문 캐시가 잘렸을 때 제도를 무더기로 지우지 않도록 상한을 둔다(한 달 실측 0.6%).
+    """
+    gone = [r for r in rows if r.get('id') not in LIST]
+    if len(gone) > len(rows) * 0.05:
+        die(f'원문 캐시에 없는 제도가 {len(gone)}/{len(rows)}건입니다. '
+            f'캐시가 잘렸을 수 있습니다(welfare_local/fetch_services.py 를 다시 돌릴 것).')
+    kept, refreshed = [], 0
+    for r in rows:
+        src = LIST.get(r.get('id'))
+        if src is None:
+            continue
+        dt = DET.get(r['id'], {})
+        new = dict(r, name=src.get('서비스명'), org=src.get('소관기관명'),
+                   orgtype=src.get('소관기관유형'), field=src.get('서비스분야'),
+                   deadline=dt.get('신청기한'), url=dt.get('온라인신청사이트URL'),
+                   tel=dt.get('문의처'), recv=dt.get('접수기관명'))
+        refreshed += new != r
+        kept.append(new)
+    print(f'[동네복지] 원문 대조: 없어진 제도 {len(gone)}건 제외 · 베낀 값 갱신 {refreshed}건')
+    return kept
 
 
 def load_tag_fix():
@@ -214,6 +253,7 @@ def main():
     age_fill_on = not ('--no-age-fill' in sys.argv or os.getenv('DONGNE_AGE_FILL') == '0')
     rows = load_rows()
     LIST, DET = load_source_text()
+    rows = sync_with_source(rows, LIST, DET)
     TAGFIX = load_tag_fix()
     MATCHFIX = load_match_fix()
     n_all = 0
