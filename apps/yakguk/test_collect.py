@@ -3,7 +3,9 @@
 
 입력값은 2026-09-11 실데이터에서 뽑은 문구들이다(dutyEtc·dutyInf·주소).
 """
+import collections
 import os
+import re
 import sys
 import unittest
 from datetime import date
@@ -222,6 +224,30 @@ class VerdictTest(unittest.TestCase):
         self.assertTrue(recs[0]['call'])
         self.assertEqual(recs[0]['t'][0], '0900-1800')
         self.assertEqual(recs[0]['t'][6], '')  # 일요일 미기재
+
+
+class MoisIdTest(unittest.TestCase):
+    """S2 에만 있는 약국의 id. 2026-10-06 — 끝 12자리만 써서 다른 구 약국끼리 겹쳤고 앱 목록이 죽었다."""
+
+    def test_same_serial_in_other_district_gets_different_id(self):
+        # 실측 형태(25자, 숫자 21자리). 자치단체 자리만 다르고 끝 12자리가 같은 두 곳.
+        a = {'관리번호': 'PHMD120243220034084000019'}
+        b = {'관리번호': 'PHMD120243130034084000019'}
+        self.assertNotEqual(a['관리번호'], b['관리번호'])
+        self.assertEqual(re.sub(r'\D', '', a['관리번호'])[-12:], re.sub(r'\D', '', b['관리번호'])[-12:])
+        self.assertNotEqual(C.mois_id(a), C.mois_id(b))
+        self.assertTrue(C.mois_id(a).startswith('L'))
+
+    def test_guard_catches_duplicate_ids(self):
+        def run(recs):
+            g = C.guards([], 0, recs, collections.Counter(), [], None, date(2026, 10, 6))
+            return next(x for x in g if x['name'] == 'unique_ids')
+        ok = [{'id': 'A', 'lat': 37.5, 'lon': 127.0, 'sido': '서울특별시'},
+              {'id': 'B', 'lat': 37.5, 'lon': 127.0, 'sido': '서울특별시'}]
+        self.assertTrue(run(ok)['ok'])
+        self.assertFalse(run(ok + [dict(ok[0])])['ok'])
+        # 관리번호가 비어 'L' 만 남은 것도 막는다 — 한 건이라 중복은 아니지만 다음 날 둘이 되면 죽는다
+        self.assertFalse(run(ok + [{'id': 'L', 'lat': 37.5, 'lon': 127.0, 'sido': '서울특별시'}])['ok'])
 
 
 class PublishIntervalTest(unittest.TestCase):

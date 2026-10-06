@@ -461,12 +461,21 @@ def build(nmc, mois, today, hira=None):
             continue
         verdict['no_hours'] += 1
         recs.append({
-            'id': 'L' + re.sub(r'\D', '', r.get('관리번호', ''))[-12:],
+            'id': mois_id(r),
             'name': r['사업장명'], 'addr': r['도로명주소'] or r.get('지번주소', ''),
             'tel': r['전화번호'], 'lat': round(lat, 6), 'lon': round(lon, 6),
             'sido': sido, 'sgg': sgg, 't': [''] * 8, 'v': 'no_hours', 'src': 'mois',
         })
     return recs, verdict, dropped, unknown_region
+
+
+def mois_id(r):
+    """S2 에만 있는 약국의 id — 'L' + 관리번호의 숫자 **전체**.
+    🚨2026-10-06 까지는 끝 12자리만 썼다. 관리번호는 `PHMD1` + 연도 + 개방자치단체코드 + 일련번호라
+      끝 12자리에는 **자치단체가 안 들어간다** — 다른 구의 약국끼리 id 가 겹쳤고(발행분 96종 362건),
+      앱의 LazyColumn 이 같은 key 를 두 번 받아 죽었다(yakguk 0.5.1 치명 크래시).
+      전체 자릿수는 영업 중 25,895행에서 중복 0 이다(같은 날 실측). 가드 `unique_ids` 가 지킨다."""
+    return 'L' + re.sub(r'\D', '', r.get('관리번호', ''))
 
 
 GEO_AGREE_M = 200
@@ -566,6 +575,10 @@ def guards(nmc, nmc_total, recs, verdict, holidays, prev, today, hira=None, hira
 
     bad_geo = sum(1 for r in recs if not (33 <= r['lat'] <= 39 and 124 <= r['lon'] <= 132))
     add('geo_bbox', bad_geo == 0, bad_geo, '좌표 위도 33-39 · 경도 124-132')
+
+    # 앱이 id 를 목록 key·즐겨찾기 키로 쓴다 — 겹치면 앱이 죽는다(2026-10-06). 하나라도 있으면 발행하지 않는다.
+    dup = [k for k, c in collections.Counter(r['id'] for r in recs).items() if c > 1 or not k or k == 'L']
+    add('unique_ids', not dup, len(dup) if len(dup) > 5 else dup, 'id 중복·빈 id 0건')
 
     by_sido = collections.Counter(r['sido'] for r in recs)
     missing = [s for s in SIDO_CODE if by_sido[s] == 0]
