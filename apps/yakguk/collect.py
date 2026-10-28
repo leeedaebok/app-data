@@ -643,6 +643,15 @@ def load_prev():
         return None
 
 
+def mask_secrets(s):
+    """🚨예외 원문에서 **인증키를 지운다.** `requests` 의 HTTPError 메시지에는 요청 URL 이
+    통째로 실리고, 이 수집기는 키를 URL 에 직접 붙이므로(`fetch_nmc`·`fetch_hira`) 그 안에
+    `serviceKey=` 가 평문으로 들어 있다. `validation.json` 은 **공개 저장소로 푸시**되니
+    여기서 지워야 한다 — 2026-10-28 실측: S3 가 400 을 내자 그 원문이 그대로 올라갔다.
+    ⚠️자르기(`[:300]`) **전에** 지울 것. 뒤에 자르면 잘린 키 조각이 남는다."""
+    return re.sub(r'((?:service|api|auth)[-_]?key=)[^&\s"\']+', r'\1<masked>', s, flags=re.I)
+
+
 def write_validation(obj):
     os.makedirs(OUT_DIR, exist_ok=True)
     dump(os.path.join(OUT_DIR, 'validation.json'), obj)
@@ -748,7 +757,7 @@ def main():
             print(f'[약국] 발행 {sum(r["count"] for r in regions)}곳 · {len(regions)}개 시도 · 판정 {dict(verdict)}')
     except Exception as e:
         val['reasons'] = ['exception']
-        val['error'] = f'{type(e).__name__}: {str(e)[:300]}'
+        val['error'] = f'{type(e).__name__}: {mask_secrets(str(e))[:300]}'
         print('[약국] 실패 — 지난 데이터 유지:', val['error'])
         traceback.print_exc()
     if not a.dry_run:

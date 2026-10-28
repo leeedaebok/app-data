@@ -89,6 +89,31 @@ class KeyTest(unittest.TestCase):
         self.assertIsNone(C.key_phone('1234'))
 
 
+class MaskSecretsTest(unittest.TestCase):
+    """🚨`validation.json` 은 공개 저장소로 간다 — 예외 원문의 인증키가 거기 남으면 안 된다."""
+
+    # 2026-10-28 에 실제로 공개 저장소에 올라간 그 문구(키만 짧게 줄였다)
+    REAL = ("400 Client Error: Bad Request for url: http://apis.data.go.kr/004130051566/"
+            "openapi/service/pharmacyInfoService/getParmacyBasisList?serviceKey=M%2B7Bs37"
+            "5pCSbNLMzne38f%3D%3D&pageNo=1&numOfRows=1000&SG_APIM=vVGxIdwj3_LegWNxcGYrqK54L")
+
+    def test_real_error_loses_the_key(self):
+        out = C.mask_secrets(self.REAL)
+        self.assertIn('serviceKey=<masked>', out)
+        self.assertNotIn('M%2B7Bs37', out)
+        # 키만 지우고 나머지 단서(엔드포인트·파라미터)는 남겨야 원인을 읽을 수 있다
+        self.assertIn('getParmacyBasisList', out)
+        self.assertIn('pageNo=1', out)
+
+    def test_other_spellings(self):
+        for q in ('apiKey=abc123', 'API_KEY=abc123', 'authkey=abc123', 'serviceKey=abc123'):
+            self.assertNotIn('abc123', C.mask_secrets(f'http://x/y?{q}&a=1'))
+
+    def test_leaves_clean_text_alone(self):
+        self.assertEqual(C.mask_secrets('S3 API resultCode=30 SERVICE KEY IS NOT REGISTERED'),
+                         'S3 API resultCode=30 SERVICE KEY IS NOT REGISTERED')
+
+
 def _nmc(hpid, name, addr, tel='02-111-2222', etc=''):
     d = {'hpid': hpid, 'dutyName': name, 'dutyAddr': addr, 'dutyTel1': tel,
          'wgs84Lat': '37.5', 'wgs84Lon': '127.0', 'dutyEtc': etc}
