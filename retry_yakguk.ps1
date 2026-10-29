@@ -30,7 +30,7 @@ try {
     Log "validation.json 을 못 읽음 — 재수집한다: $($_.Exception.Message)"
 }
 
-if (-not $need) { Log '오늘 04:00 발행 성공 — 재시도 안 함'; exit 0 }
+if (-not $need) { Log "오늘 이미 발행됨($gen) — 재시도 안 함"; exit 0 }
 
 Log '재수집 시작: apps\yakguk\collect.py'
 # 🚨10/29 추가 실측: 실패는 새벽만이 아니다. 같은 날 08:3x 엔 정상, 08:41 엔 **단건 요청도
