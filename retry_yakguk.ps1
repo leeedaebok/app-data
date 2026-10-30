@@ -24,13 +24,18 @@ $need = $true
 try {
     $j = Get-Content $val -Raw -Encoding UTF8 | ConvertFrom-Json
     $gen = [string]$j.generated_at
-    if ($gen.StartsWith($today) -and $j.published -eq $true) { $need = $false }
+    # ⚠️기준은 '오늘 날짜로 발행됐나'가 아니라 **마지막 시도가 성공했나**다(10/30 정정).
+    #   collect.py 는 매일 발행하지 않는다 — 발행 간격(평소 주 단위, 공휴일 근처만 매일) 전이면
+    #   '건너뜀'으로 끝나고 validation.json 을 새로 쓰지 않는다. 날짜로 보면 그런 날을 실패로
+    #   오인해 매시 S1·S3 전량을 다시 받는다(10/30 07·08시에 그랬다). 실패한 시도는 반드시
+    #   published=false 로 파일을 남기므로 이 한 칸으로 충분하다.
+    if ($j.published -eq $true) { $need = $false }
     Log "확인: generated_at=$gen published=$($j.published) reasons=$($j.reasons -join ',')"
 } catch {
     Log "validation.json 을 못 읽음 — 재수집한다: $($_.Exception.Message)"
 }
 
-if (-not $need) { Log "오늘 이미 발행됨($gen) — 재시도 안 함"; exit 0 }
+if (-not $need) { Log "마지막 시도 발행 성공($gen) — 재시도 안 함"; exit 0 }
 
 Log '재수집 시작: apps\yakguk\collect.py'
 # 🚨10/29 추가 실측: 실패는 새벽만이 아니다. 같은 날 08:3x 엔 정상, 08:41 엔 **단건 요청도
