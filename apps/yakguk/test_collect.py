@@ -309,5 +309,42 @@ class PublishIntervalTest(unittest.TestCase):
         self.assertEqual(C.publish_interval_days(date(2026, 9, 20), [{'date': 'x'}, {}]), C.PUBLISH_INTERVAL_DAYS)
 
 
+class FetchHiraDedupTest(unittest.TestCase):
+    """2026-11-17: S3 페이지가 겹쳐 같은 약국이 두 번 오고 다른 약국이 빠졌다 — 고유 건수로 세고 다시 받는다."""
+
+    class _Resp:
+        def __init__(self, ids, total):
+            items = ''.join(f'<item><ykiho>{i}</ykiho><yadmNm>약국{i}</yadmNm></item>' for i in ids)
+            self.content = (f'<response><header><resultCode>00</resultCode></header><body>'
+                            f'<items>{items}</items><totalCount>{total}</totalCount></body></response>').encode()
+
+    def _run(self, pages_by_pass):
+        calls = {'pass': 0, 'page': 0}
+        seq = [p for passes in pages_by_pass for p in passes]
+        it = iter(seq)
+        orig_get, orig_sleep = C._get, C.time.sleep
+        C._get = lambda url: next(it)
+        C.time.sleep = lambda s: None
+        try:
+            return C.fetch_hira('k')
+        finally:
+            C._get, C.time.sleep = orig_get, orig_sleep
+
+    def test_duplicates_removed_and_second_pass_fills_gap(self):
+        R = self._Resp
+        # 1회차: 4건 중 'b' 가 두 번, 'd' 가 빠짐 / 2회차: 순서가 바뀌어 'd' 가 들어옴
+        rows, total = self._run([[R(['a', 'b'], 4), R(['b', 'c'], 4)],
+                                 [R(['d', 'a'], 4), R(['b', 'c'], 4)]])
+        self.assertEqual(total, 4)
+        self.assertEqual(sorted(r['ykiho'] for r in rows), ['a', 'b', 'c', 'd'])
+
+    def test_stays_short_after_max_passes(self):
+        R = self._Resp
+        page = [R(['a', 'b'], 3), R(['b'], 3)]
+        rows, total = self._run([page] * C.HIRA_MAX_PASSES)
+        self.assertEqual(total, 3)
+        self.assertEqual(len(rows), 2)   # 모자란 채로 돌려준다 → s3_complete 가드가 막는다
+
+
 if __name__ == '__main__':
     unittest.main()

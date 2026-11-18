@@ -251,22 +251,45 @@ CONFIRMED_HOLIDAY_NAMES = ('새해첫날', '삼일절', '어린이날', '부처�
 FIXED_MMDD = ('0101', '0301', '0505', '0606', '0815', '1003', '1009', '1225')
 
 
+def _hira_id(h):
+    """S3 행의 고유 키 — 요양기호(ykiho). 없으면 이름+주소로 대신한다."""
+    return h.get('ykiho') or (h.get('yadmNm', ''), h.get('addr', ''))
+
+
+HIRA_MAX_PASSES = 3
+
+
 def fetch_hira(key):
-    items, page, total = [], 1, None
-    while True:
-        r = _get(f'{HIRA_URL}?serviceKey={key}&pageNo={page}&numOfRows=1000')
-        root = ET.fromstring(r.content)
-        code = root.findtext('header/resultCode')
-        if code != '00':
-            raise RuntimeError(f'S3 API resultCode={code} {root.findtext("header/resultMsg")}')
-        total = int(root.findtext('body/totalCount') or 0)
-        batch = [{c.tag: (c.text or '').strip() for c in it} for it in root.iter('item')]
-        items.extend(batch)
-        if not batch or len(items) >= total:
+    """S3 전체를 받아 **요양기호로 중복을 지운** 목록과 totalCount 를 돌려준다.
+
+    🚨2026-11-17: 심평원 API 가 페이지 순서를 고정하지 않아 같은 약국이 여러 페이지에 나오고 대신 다른 약국이
+    빠졌다 — 받은 행 수는 totalCount 와 같아 `s3_complete` 는 통과했는데 S1↔S3 짝이 78% 로 떨어져 발행이 막혔다.
+    그래서 고유 건수로 세고, 모자라면 전체를 다시 훑어 합친다(최대 [HIRA_MAX_PASSES]번). 그래도 모자라면
+    고유 건수가 totalCount 보다 작은 채로 돌려준다 → `s3_complete` 가드가 막는다(직전 자료 유지).
+    """
+    uniq, total = {}, None
+    for attempt in range(HIRA_MAX_PASSES):
+        page, got = 1, 0
+        while True:
+            r = _get(f'{HIRA_URL}?serviceKey={key}&pageNo={page}&numOfRows=1000')
+            root = ET.fromstring(r.content)
+            code = root.findtext('header/resultCode')
+            if code != '00':
+                raise RuntimeError(f'S3 API resultCode={code} {root.findtext("header/resultMsg")}')
+            total = int(root.findtext('body/totalCount') or 0)
+            batch = [{c.tag: (c.text or '').strip() for c in it} for it in root.iter('item')]
+            for h in batch:
+                uniq.setdefault(_hira_id(h), h)
+            got += len(batch)
+            if not batch or got >= total:
+                break
+            page += 1
+            time.sleep(0.3)
+        print(f'[약국] S3 {attempt + 1}회차: 받은 행 {got} · 고유 {len(uniq)}/{total}')
+        if total and len(uniq) >= total:
             break
-        page += 1
-        time.sleep(0.3)
-    return items, total
+        time.sleep(5)
+    return list(uniq.values()), total
 
 
 def fetch_kasi(key, years):
