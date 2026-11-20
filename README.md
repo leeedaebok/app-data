@@ -27,6 +27,13 @@ https://raw.githubusercontent.com/leeedaebok/app-data/master/data/<앱>/<파일>
 | gonggoalimi | `data/gonggoalimi/notices.json` | 모집중 사업공고 | K-Startup (data.go.kr 15125364) |
 | dongnebokji | `data/dongnebokji/index.json` + `r0000~r0226.json` | 시군구별 복지 제도 227개 지역 | 보조금24(15113968) + 복지로(B554287) |
 | yakguk | `data/yakguk/index.json` + `s_<시도>.json` 16개 + `holidays.json` + `validation.json` | 전국 약국 운영시간 + 영업상태 교차검증 (**주 1회**) | 국립중앙의료원 약국(15000576) × 행안부 인허가 약국(15045036) + 공휴일 ICS |
+| haneul | `data/haneul/alerts.json` | 발효 중 기상특보·예비특보(시도·시군구로 풀어 둠) + 최근 2일 국내 유감 지진(시도별 진도) (**10분**) | 기상청 기상특보(15000415, 공공누리 1유형) · 지진정보(15000420) |
+
+⚠️ **haneul 은 `refresh.bat` 이 돌리지 않는다.** 수집기 이름이 `collect.py` 가 아니라 `alerts.py` 다 —
+기상청 장애가 다른 앱 푸시를 막지 않게 순회에서 뺐다. 작업 스케줄러 `\app-data haneul alerts`(10분)가
+`refresh_haneul.ps1` 을 돌리고, 내용이 바뀌었거나 3시간이 지났을 때만 그 파일 하나를 커밋한다.
+파서 확인: `python apps/haneul/alerts.py --selftest`. 시·도 줄임 표는 앱 `KmaRegion` 과 같아야 한다.
+⚠️인증키(디코딩 키)는 **URL 인코딩해서** 보낼 것 — 빠뜨리면 403 '등록되지 않은 서비스키'라 승인 전으로 오인한다.
 
 🚨 **여기에 앱을 더하면 `autoblog_local/app_api_health.py` 의 `build_checks()` 에도 같이 더할 것.**
 수집이 멈춰도 파일은 깃에 그대로 남아 앱은 낡은 자료를 계속 보여 준다 — 생성시각을 보는 감시가 없으면 아무도 모른다.
