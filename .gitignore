@@ -3,3 +3,5 @@ __pycache__/
 .venv/
 *.tmp
 logs/
+_cache/
+.env
