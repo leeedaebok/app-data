@@ -12,8 +12,11 @@ master 에 커밋한다. 실거래 3년치는 수백 MB 라 master 히스토리�
 - 그보다 오래된 달은 캐시가 없을 때만 받는다.
 - 하루 호출 한도(개발 키 10,000)를 넘지 않게 --budget 만큼만 부르고 멈춘다. 다음 실행이 이어 받는다.
 
+- 기본 120개월(10년, 2026-11-22 운영자 요청 — 단지 상세 그래프). 최근 달부터 거꾸로 채우므로
+  예산이 끊겨도 앱이 바로 쓰는 최근 3년이 먼저 찬다. 첫 백필은 약 3만 호출 = 하루 9,000씩 사흘.
+
 사용
-  python apps/jeonyong/fetch_trades.py --months 36 --budget 9000
+  python apps/jeonyong/fetch_trades.py --budget 9000
   python apps/jeonyong/fetch_trades.py --only 11680 --months 2      # 한 곳만
 """
 from __future__ import annotations
@@ -160,7 +163,7 @@ def write_atomic(path: Path, obj) -> None:
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--months", type=int, default=36)
+    ap.add_argument("--months", type=int, default=120)
     ap.add_argument("--budget", type=int, default=9000)
     ap.add_argument("--only", nargs="*", help="시군구 코드 일부만")
     args = ap.parse_args()
