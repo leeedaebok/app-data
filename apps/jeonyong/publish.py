@@ -23,7 +23,9 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import shutil
+import stat
 import subprocess
 import sys
 from pathlib import Path
@@ -66,10 +68,17 @@ def stats() -> dict:
             "trades": trades, "complexes": cx, "geo": geo, "hist": hist, "hist_hash": h.hexdigest()}
 
 
+def _force_writable(func, path, _exc) -> None:
+    """git 객체 파일은 읽기 전용이라 Windows 에서 rmtree 가 PermissionError 로 멈춘다(11/23-27 게시 5일 실패).
+    읽기 전용을 풀고 같은 삭제를 다시 한다."""
+    os.chmod(path, stat.S_IWRITE)
+    func(path)
+
+
 def push_dir(src: Path, work: Path, branch: str, readme: str, msg: str, remote: str) -> None:
     """src 를 커밋 하나짜리 저장소로 만들어 branch 에 강제 푸시."""
     if work.exists():
-        shutil.rmtree(work)
+        shutil.rmtree(work, onexc=_force_writable)
     shutil.copytree(src, work)
     (work / "README.md").write_text(readme, encoding="utf-8")
     run("git", "init", "-q", "-b", branch, cwd=work)
